@@ -1,0 +1,201 @@
+---
+title: "shopify_DS_F22"
+author: "Cheryl Bui"
+date: "5/17/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load libraries}
+library(tidyverse)
+```
+
+## Question 1
+### Loading data, EDA
+```{r load_data}
+data = read.csv('./2019 Winter Data Science Intern Challenge Data Set.csv')
+
+head(data)
+summary(data)
+psych::describe(data)
+
+cat('duplicated:', any(duplicated(data)))
+```
+As we can see from the summary statistics, there is no missing data. I can safely add another column for average price per sneaker pair, because there are 17 orders (0.3%) containing over 2000 items, which can inflate or skew the average amount of order because they look like whole sale rather than retail
+
+```{r}
+# add another column for average price of a pair of sneaker
+data$price_per_sneakers = data$order_amount / data$total_items
+```
+
+From the summary statistics, it looks like the distribution of order value and average price is right-skewed. We'll take a look at their histogram plot. Since the data is skewed, I'll draw in log scale
+
+As all values of order are greater than 0, we dont have to +1 
+```{r dist_order_value}
+# order amount
+ggplot(data, aes(x = order_amount)) + 
+  geom_histogram() + 
+  # geom_histogram(bins=10) +
+  scale_x_log10() +
+  ggtitle("Order amount")
+
+# shoe price
+ggplot(data, aes(x = price_per_sneakers)) + 
+  geom_histogram() + 
+  # geom_histogram(bins=10) +
+  scale_x_log10() +
+  ggtitle("Averaged price per pair of sneakers")
+```
+Again, we can see that very few orders surpass 10,000 USD. There are a few pairs of sneaker at the price of over 20,000USD. These are flags for outliers or fraud transactions. There are also a cluster of sneaker pairs at about 10^2.5 = roughly 350 USD, which is quite pricey but still acceptable, so I will not consider them as outliers. Let's inspect these suspicious transactions
+
+```{r inspect_suspicious}
+data %>% filter(price_per_sneakers > 10^3)
+data %>% filter(order_amount >= 10^4 )
+
+```
+All of the 25,000USD-sneakers are from shop 78. All of the large amount transactions are from shop 78 and 42.  Let's see the other transactions by this shop, as well as the users buying from this shop. 
+
+```{r inspect_shop78}
+data[data$shop_id == 78,]
+unique(data[data$shop_id == 78, c('price_per_sneakers')])
+unique(data[data$shop_id == 78, c('user_id')])
+```
+
+```{r inspect_shop42}
+data[data$shop_id == 42,]
+unique(data[data$shop_id == 42, c('price_per_sneakers')])
+unique(data[data$shop_id == 42, c('user_id')])
+```
+
+All of the transactions from shop 78 and 42 look suspicious (every pair of sneaker is $25725 USD for shop 78 and 352 for shop 42). These are the two single value clusters we saw from the historgram. Let's remove these 2 shops from our dataset, and report the statistics of this shop on the side. 
+Let's see the buyers from these two shops too
+```{r buyers_from_fraud}
+buyers_42 = unique(data[data$shop_id == 42, c('user_id')])
+buyers_78 = unique(data[data$shop_id == 78, c('user_id')])
+common_fraud_buyers = intersect(buyers_78, buyers_42)
+union_fraud_buyers = union(buyers_78, buyers_42)
+
+cat('all fraud buyers: ',union_fraud_buyers)
+cat('common fraud buyers: ',common_fraud_buyers)
+
+# let's see the other transactions that they make
+data_by_user = data[data$user_id %in% union_fraud_buyers, ]
+data_by_user <- data_by_user %>% group_by(user_id)
+
+data_by_user
+data_by_user %>% summarise( order_amount = mean(order_amount), 
+                            price_per_sneakers = mean(price_per_sneakers) ,
+                            total_items = mean(total_items) ) %>%
+                arrange(desc(order_amount))
+                  
+```
+
+User 607 solely buy the large amount order. However, since the other user_ids starts from 700, I guess this is a system glitch or test. Half of other transactions are above $1000 / pair of sneaker, which is quite pricey but I'll let it pass
+
+Let's see how the transactions look like without shop 78 and 42. Also, let's check how frequent do the shops and buyers make their transaction
+
+```{r}
+data_clean = data[! data$shop_id %in% c(42, 78), ]
+
+values_to_inspect = c('order_amount', 'price_per_sneakers', 'user_id', 'shop_id')
+
+for(value in values_to_inspect){
+  # order amount
+  print(ggplot(data_clean, aes_string(x = value)) + 
+          geom_histogram(binwidth =10) +
+          ggtitle(value)
+        )
+}
+
+ggplot(data_clean, aes(x = payment_method)) + 
+          geom_bar(stat = 'count')
+```
+
+The histograms look like a uniform or normal distribution now. We can carry out the analysis on the clean and on the two suspicious shops 42 and 78. One small note is that these users buy the sneakers very frequently (about 20-30 pairs on March on average).
+
+```{r group_by_count}
+data_clean %>%
+  group_by(user_id) %>%
+  summarise(Freq = sum(total_items)) %>%
+  arrange(desc(Freq))
+```
+
+
+```{r descriptive_stats}
+summary(data_clean)
+psych::describe(data_clean)
+psych::describe(data[data$shop_id %in% c(42), ])
+psych::describe(data[data$shop_id %in% c(78), ])
+```
+
+
+### Answer to question 1a: What could be wrong with analysis?
+- Firstly, there is no duplicated row or missing row.
+- Not inspecting the data to detect outliers or suspicious transactions. Data wrangling and cleaning should be carried out in the first place
+- Exploratory data analysis shows transactions made by shop 78 and 42, and by user 607 are suspicious. All of the order amount is shop 78 and 42 is especially high, and they seem to sell flat-priced sneakers at $352 and 25250 USD. Also user 607 solely buy the large amount order from shop 42. However, since the other user_ids starts from 700, I guess this is a system glitch or test.  I will report the descriptive statistics of the data without these two shops, and make a separate report on these two shops.
+- Also the number of sneaker pairs made by each user is quite large (above 14 pairs of sneakers) during March.
+
+### Answer to question 1b: What metric would you report for this dataset?
+- We probably should take a look at the 5-number summary statistics (1st, 2nd, 3rd quartile, min, max, and mean) and the other descriptive statistics (standard deviation) as a whole to generate a description of the data set for the numeric columns
+- If we have to choose only 1 metric to replace mean, then the simplest answer is median. However exploratory data analysis should be carried out to detect suspicious transaction
+
+###  Answer to question 1c: What would be that value
+- Median transaction amount is 284 for the uncleaned data
+
+- For the cleaned data
+```{r summary_statistics}
+summary(data_clean)
+```
+
+- For the shops with suspicious transactions: shop 42
+```{r summary_statistics_42}
+summary(data[data$shop_id == 42,])
+```
+
+- For the shops with suspicious transactions: shop 78
+```{r summary_statistics_78}
+summary(data[data$shop_id == 78,])
+```
+
+- For the initial, uncleaned data:
+```{r summary_statistics_uncleaned}
+summary(data)
+```
+
+## Question 2
+### 2a. How many orders were shipped by Speedy Express in total?
+```
+SELECT count(ShipperName) FROM [Orders]
+JOIN Shippers on [Shippers].[ShipperID] = [Orders].[ShipperID]
+WHERE Shippers.ShipperName = 'Speedy Express'
+```
+ANS: 54
+
+### 2b. What is the last name of the employee with the most orders?
+```
+SELECT LastName, COUNT(OrderID)
+FROM [Orders]
+JOIN [Employees] on [Employees].[EmployeeID] = [Orders].[EmployeeID]
+GROUP BY LastName
+ORDER BY COUNT(OrderID) DESC
+LIMIT 1
+```
+ANS: Peacock
+
+### 2c. What product was ordered the most by customers in Germany?
+```
+SELECT [Products].[productName], SUM([OrderDetails].[Quantity]) as [Sum_Orders]
+FROM [Customers]
+JOIN Orders on Customers.CustomerID = Orders.CustomerID
+JOIN OrderDetails on Orders.OrderID = OrderDetails.OrderID 
+JOIN Products on OrderDetails.ProductID = Products.ProductID
+WHERE [Customers].[Country] = 'Germany'
+GROUP BY [Products].[ProductID]
+ORDER BY Sum_Orders DESC
+LIMIT 1
+```
+ANS: Boston Crab Meat
+
